@@ -3,9 +3,9 @@ package com.mini.spring.boot;
 import com.mini.spring.core.AnnotationConfigApplicationContext;
 import com.mini.spring.core.PropertyResolver;
 import com.mini.spring.web.annotation.RestController;
-import com.mini.spring.web.server.EmbeddedWebServer;
-import com.mini.spring.web.server.HandlerMapping;
+import com.mini.spring.web.server.*;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -104,7 +104,48 @@ public class MySpringApplication {
             }
         }
 
-        // ======================== 第 4 步：读取端口配置 ========================
+        // ======================== 第 4 步：收集过滤器和拦截器 ========================
+        // 从 IoC 容器中自动发现 Filter、HandlerInterceptor、FilterRegistrationBean、InterceptorRegistry
+        List<FilterRegistrationBean> filterRegistrations = new ArrayList<>();
+        InterceptorRegistry interceptorRegistry = new InterceptorRegistry();
+
+        // 自动发现 Filter Bean（直接实现 Filter 接口的 Bean）
+        List<Filter> filterBeans = context.getBeansOfType(Filter.class);
+        for (Filter filter : filterBeans) {
+            FilterRegistrationBean reg = new FilterRegistrationBean();
+            reg.setFilter(filter);
+            reg.setOrder(filter.getOrder());
+            filterRegistrations.add(reg);
+            System.out.println("[MiniSpring] 注册过滤器: " + filter.getClass().getSimpleName()
+                    + " (order=" + filter.getOrder() + ")");
+        }
+
+        // 自动发现 FilterRegistrationBean（手动配置的过滤器注册）
+        List<FilterRegistrationBean> regBeans = context.getBeansOfType(FilterRegistrationBean.class);
+        for (FilterRegistrationBean reg : regBeans) {
+            filterRegistrations.add(reg);
+            System.out.println("[MiniSpring] 注册过滤器: " + reg.getFilter().getClass().getSimpleName()
+                    + " (order=" + reg.getOrder() + ", patterns=" + String.join(",", reg.getUrlPatterns()) + ")");
+        }
+
+        // 自动发现 HandlerInterceptor Bean（直接实现 HandlerInterceptor 接口的 Bean）
+        List<HandlerInterceptor> interceptorBeans = context.getBeansOfType(HandlerInterceptor.class);
+        for (HandlerInterceptor interceptor : interceptorBeans) {
+            interceptorRegistry.addInterceptor(interceptor);
+            System.out.println("[MiniSpring] 注册拦截器: " + interceptor.getClass().getSimpleName());
+        }
+
+        // 自动发现 InterceptorRegistry Bean（手动配置的拦截器注册表）
+        List<InterceptorRegistry> registryBeans = context.getBeansOfType(InterceptorRegistry.class);
+        for (InterceptorRegistry reg : registryBeans) {
+            // 将手动注册的拦截器合并到主注册表中
+            for (InterceptorRegistry.InterceptorMapping mapping : reg.getMappings()) {
+                interceptorRegistry.addInterceptor(mapping.getInterceptor())
+                        .setOrder(mapping.getOrder());
+            }
+        }
+
+        // ======================== 第 5 步：读取端口配置 ========================
         // 从 PropertyResolver 中获取 application.properties 里 server.port 的值
         // 如果未配置，则使用默认端口 8080
         int port = DEFAULT_PORT;
@@ -112,11 +153,11 @@ public class MySpringApplication {
         String portStr = resolver.getProperty("server.port", String.valueOf(DEFAULT_PORT));
         port = Integer.parseInt(portStr);
 
-        // ======================== 第 5 步：启动内嵌 Web 服务器 ========================
+        // ======================== 第 6 步：启动内嵌 Web 服务器 ========================
         // EmbeddedWebServer 基于 JDK 自带的 com.sun.net.httpserver.HttpServer
         // 它在指定端口监听 HTTP 请求，并将请求分发给 HandlerMapping 处理
         try {
-            EmbeddedWebServer webServer = new EmbeddedWebServer(port, handlerMapping);
+            EmbeddedWebServer webServer = new EmbeddedWebServer(port, handlerMapping, filterRegistrations, interceptorRegistry);
             webServer.start();
 
             // 注册 JVM 关闭钩子（Shutdown Hook）

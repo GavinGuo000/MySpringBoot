@@ -10,8 +10,11 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -51,11 +54,25 @@ public class DispatcherHandler implements HttpHandler {
     /** 路由映射表，用于查找 URL 对应的 Controller 方法 */
     private final HandlerMapping handlerMapping;
 
+    /** 过滤器列表（按 order 排序），在请求到达前依次执行 */
+    private final List<FilterRegistrationBean> filterRegistrations;
+
+    /** 拦截器注册表，在 Controller 执行前后调用 */
+    private final InterceptorRegistry interceptorRegistry;
+
     /** JSON 序列化/反序列化工具（使用 Google Gson 库） */
     private final Gson gson = new Gson();
 
     public DispatcherHandler(HandlerMapping handlerMapping) {
+        this(handlerMapping, new ArrayList<>(), new InterceptorRegistry());
+    }
+
+    public DispatcherHandler(HandlerMapping handlerMapping,
+                             List<FilterRegistrationBean> filterRegistrations,
+                             InterceptorRegistry interceptorRegistry) {
         this.handlerMapping = handlerMapping;
+        this.filterRegistrations = filterRegistrations;
+        this.interceptorRegistry = interceptorRegistry;
     }
 
     /**
@@ -77,6 +94,38 @@ public class DispatcherHandler implements HttpHandler {
      */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // 提取请求路径，用于过滤器匹配
+        String path = exchange.getRequestURI().getPath();
+
+        // 筛选匹配当前路径的过滤器，并按 order 排序
+        List<Filter> matchedFilters = filterRegistrations.stream()
+                .filter(reg -> reg.matches(path))
+                .sorted((a, b) -> Integer.compare(a.getOrder(), b.getOrder()))
+                .map(FilterRegistrationBean::getFilter)
+                .collect(Collectors.toList());
+
+        // 构建过滤器链，最终处理器为本类的 doDispatch 方法
+        FilterChain chain = new FilterChain(matchedFilters, this::doDispatch);
+
+        // 启动过滤器链执行（Filter → Filter → ... → doDispatch）
+        chain.doFilter(exchange);
+    }
+
+    /**
+     * 核心请求分发逻辑 —— 在过滤器链末端被调用
+     * <p>
+     * 执行流程：
+     * <pre>
+     *   1. 解析请求信息
+     *   2. 路由匹配（HandlerMapping）
+     *   3. 执行拦截器 preHandle
+     *   4. 调用 Controller 方法
+     *   5. 执行拦截器 postHandle
+     *   6. 发送响应
+     *   7. 执行拦截器 afterCompletion
+     * </pre>
+     */
+    private void doDispatch(HttpExchange exchange) throws IOException {
         // 提取请求信息
         String method = exchange.getRequestMethod();          // HTTP 方法（GET/POST）
         String path = exchange.getRequestURI().getPath();     // 请求路径（如 /api/users/42）
@@ -100,7 +149,29 @@ public class DispatcherHandler implements HttpHandler {
             return;
         }
 
+        // 筛选适用于当前路径的拦截器
+        List<InterceptorRegistry.InterceptorMapping> applicableInterceptors =
+                interceptorRegistry.getMappings().stream()
+                        .filter(m -> m.shouldIntercept(path))
+                        .sorted((a, b) -> Integer.compare(a.getOrder(), b.getOrder()))
+                        .collect(Collectors.toList());
+
+        // 记录 preHandle 返回 true 的拦截器（用于后续调用 postHandle/afterCompletion）
+        List<HandlerInterceptor> preHandled = new ArrayList<>();
+        Exception dispatchException = null;
+
         try {
+            // ========= 执行拦截器 preHandle =========
+            for (InterceptorRegistry.InterceptorMapping mapping : applicableInterceptors) {
+                HandlerInterceptor interceptor = mapping.getInterceptor();
+                boolean proceed = interceptor.preHandle(exchange, match.route.handlerMethod);
+                if (!proceed) {
+                    // 拦截器中断请求，不再继续执行
+                    return;
+                }
+                preHandled.add(interceptor);
+            }
+
             // 解析查询参数（如 "?name=tom&age=20" → {"name":"tom", "age":"20"}）
             Map<String, String> queryParams = parseQueryParams(queryString);
 
@@ -111,12 +182,27 @@ public class DispatcherHandler implements HttpHandler {
             // 反射调用 Controller 方法
             Object result = handlerMethod.invoke(match.route.controller, args);
 
+            // ========= 执行拦截器 postHandle =========
+            for (int i = preHandled.size() - 1; i >= 0; i--) {
+                preHandled.get(i).postHandle(exchange, handlerMethod, result);
+            }
+
             // 将返回值序列化为 JSON 并发送响应
             sendJson(exchange, 200, result);
 
         } catch (Exception e) {
+            dispatchException = e;
             e.printStackTrace();
             sendError(exchange, 500, "服务器内部错误: " + e.getMessage());
+        } finally {
+            // ========= 执行拦截器 afterCompletion（无论成功或异常都执行）=========
+            for (int i = preHandled.size() - 1; i >= 0; i--) {
+                try {
+                    preHandled.get(i).afterCompletion(exchange, match.route.handlerMethod, dispatchException);
+                } catch (Exception ex) {
+                    System.err.println("[MiniSpring] 拦截器 afterCompletion 异常: " + ex.getMessage());
+                }
+            }
         }
     }
 

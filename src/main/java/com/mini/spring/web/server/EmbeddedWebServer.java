@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executors;
 
 /**
@@ -51,6 +53,12 @@ public class EmbeddedWebServer {
     /** 路由映射表，传递给 DispatcherHandler 用于查找路由 */
     private final HandlerMapping handlerMapping;
 
+    /** 过滤器注册列表 */
+    private List<FilterRegistrationBean> filterRegistrations = new ArrayList<>();
+
+    /** 拦截器注册表 */
+    private InterceptorRegistry interceptorRegistry = new InterceptorRegistry();
+
     /**
      * 创建内嵌 Web 服务器
      *
@@ -60,6 +68,23 @@ public class EmbeddedWebServer {
     public EmbeddedWebServer(int port, HandlerMapping handlerMapping) {
         this.port = port;
         this.handlerMapping = handlerMapping;
+    }
+
+    /**
+     * 创建内嵌 Web 服务器（带过滤器和拦截器）
+     *
+     * @param port                监听端口
+     * @param handlerMapping      路由映射表
+     * @param filterRegistrations 过滤器注册列表
+     * @param interceptorRegistry 拦截器注册表
+     */
+    public EmbeddedWebServer(int port, HandlerMapping handlerMapping,
+                             List<FilterRegistrationBean> filterRegistrations,
+                             InterceptorRegistry interceptorRegistry) {
+        this.port = port;
+        this.handlerMapping = handlerMapping;
+        this.filterRegistrations = filterRegistrations;
+        this.interceptorRegistry = interceptorRegistry;
     }
 
     /**
@@ -83,7 +108,7 @@ public class EmbeddedWebServer {
 
         // 创建 DispatcherHandler 并注册到根路径 "/"
         // 这意味着所有 HTTP 请求都会被 DispatcherHandler 处理
-        DispatcherHandler dispatcher = new DispatcherHandler(handlerMapping);
+        DispatcherHandler dispatcher = new DispatcherHandler(handlerMapping, filterRegistrations, interceptorRegistry);
         server.createContext("/", dispatcher);
 
         // 使用固定大小线程池处理并发请求
