@@ -77,7 +77,7 @@ public class MySpringApplication {
         // 取主类所在的包名作为组件扫描的根路径
         // 例如：com.mini.demo.MySpringBootApplication → 扫描 com.mini.demo 及其子包
         // 这与 Spring Boot 的默认行为一致：@SpringBootApplication 标注的类所在包即为扫描起点
-        String basePackage = primarySource.getPackageName();
+        String basePackage = primarySource.getPackageName(); // 获取这个类所在的包！！！！！
         System.out.println("[MiniSpring] 扫描包: " + basePackage);
 
         // ======================== 第 2 步：创建并初始化 IoC 容器 ========================
