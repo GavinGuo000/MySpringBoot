@@ -4,6 +4,9 @@ import com.mini.spring.annotation.Autowired;
 import com.mini.spring.annotation.Bean;
 import com.mini.spring.annotation.Configuration;
 import com.mini.spring.annotation.Value;
+import com.mini.spring.annotation.Aspect;
+import com.mini.spring.aop.AopProxyFactory;
+import com.mini.spring.aop.AspectManager;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -78,6 +81,13 @@ public class BeanFactory {
      * 用于解析 @Value("${key:default}") 注解中的占位符表达式
      */
     private final PropertyResolver propertyResolver;
+
+    /**
+     * 切面管理器
+     * <p>
+     * 用于解析 @Aspect 切面 Bean，匹配目标方法，实现 AOP 动态代理
+     */
+    private final AspectManager aspectManager = new AspectManager();
 
     public BeanFactory(PropertyResolver propertyResolver) {
         this.propertyResolver = propertyResolver;
@@ -191,7 +201,11 @@ public class BeanFactory {
         // 注意：此时 Bean 已创建，但字段上的 @Autowired 还没有注入
         instantiateBeans();
 
-        // 第三阶段：遍历所有 Bean，注入 @Autowired 依赖和 @Value 配置值
+        // 第三阶段：应用 AOP 代理（扫描 @Aspect 切面，为匹配的 Bean 创建动态代理）
+        // 必须在依赖注入之前执行，这样注入的才是代理对象而非原始对象
+        applyAopProxies();
+
+        // 第四阶段：遍历所有 Bean，注入 @Autowired 依赖和 @Value 配置值
         populateBeans();
 
         System.out.println("[MiniSpring] ========== IoC 容器初始化完成 ==========");
@@ -525,6 +539,71 @@ public class BeanFactory {
         }
 
         throw new RuntimeException("未找到类型为 " + requiredType.getName() + " 的 Bean，无法完成注入");
+    }
+
+    // ======================== 第四阶段：AOP 代理 ========================
+
+    /**
+     * 应用 AOP 代理 —— 扫描切面，为匹配的 Bean 创建 JDK 动态代理
+     * <p>
+     * 对标 Spring 的 {@code AbstractAutoProxyCreator}（BeanPostProcessor）。
+     * <p>
+     * 处理流程：
+     * <pre>
+     *   1. 扫描所有 Bean，找到标注 @Aspect 的切面 Bean
+     *   2. 将切面 Bean 注册到 AspectManager（解析 @Before/@After/@Around）
+     *   3. 遍历所有 Bean，检查是否需要 AOP 代理
+     *   4. 需要代理的 Bean → 用 AopProxyFactory 创建代理对象，替换 singletonMap 中的原始 Bean
+     * </pre>
+     */
+    private void applyAopProxies() {
+        if (!hasAspectBeans()) {
+            return; // 没有切面 Bean，跳过 AOP
+        }
+
+        System.out.println("[MiniSpring] ========== 开始应用 AOP 代理 ==========");
+
+        // 第 1 步：收集所有 @Aspect 切面 Bean
+        for (Map.Entry<String, Object> entry : singletonMap.entrySet()) {
+            Object bean = entry.getValue();
+            if (bean.getClass().isAnnotationPresent(Aspect.class)) {
+                aspectManager.addAspect(bean);
+            }
+        }
+
+        if (!aspectManager.hasAspects()) {
+            return;
+        }
+
+        // 第 2 步：为需要代理的 Bean 创建代理
+        AopProxyFactory proxyFactory = new AopProxyFactory(aspectManager);
+        for (Map.Entry<String, Object> entry : singletonMap.entrySet()) {
+            String beanName = entry.getKey();
+            Object bean = entry.getValue();
+
+            // 跳过切面 Bean 本身（避免循环代理）
+            if (bean.getClass().isAnnotationPresent(Aspect.class)) {
+                continue;
+            }
+
+            if (aspectManager.needsProxy(bean.getClass())) {
+                Object proxy = proxyFactory.createProxy(bean, bean.getClass());
+                singletonMap.put(beanName, proxy);
+                System.out.println("[MiniSpring] Bean '" + beanName + "' 已被 AOP 代理替换");
+            }
+        }
+    }
+
+    /**
+     * 检查是否存在 @Aspect 标注的 Bean
+     */
+    private boolean hasAspectBeans() {
+        for (BeanDefinition def : definitionMap.values()) {
+            if (def.getBeanClass().isAnnotationPresent(Aspect.class)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ======================== 工具方法 ========================

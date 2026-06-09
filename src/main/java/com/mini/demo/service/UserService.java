@@ -9,7 +9,7 @@ import java.util.*;
  * 用户服务 —— 展示 @Autowired 依赖注入
  */
 @Component
-public class UserService {
+public class UserService implements UserOperations {
 
     @Autowired
     private UserRepository userRepository;

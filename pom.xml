@@ -24,6 +24,12 @@
             <artifactId>gson</artifactId>
             <version>2.10.1</version>
         </dependency>
+        <!-- ByteBuddy：为无接口的类生成子类代理（类似 Spring 的 CGLIB 代理） -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>1.14.18</version>
+        </dependency>
     </dependencies>
 
     <build>

@@ -1,7 +1,7 @@
 package com.mini.demo.controller;
 
 import com.mini.demo.service.GreetingService;
-import com.mini.demo.service.UserService;
+import com.mini.demo.service.UserOperations;
 import com.mini.spring.annotation.Autowired;
 import com.mini.spring.web.annotation.*;
 
@@ -28,7 +28,7 @@ public class HelloController {
     private GreetingService greetingService;
 
     @Autowired
-    private UserService userService;
+    private UserOperations userService;
 
     // ==================== 基础路由 ====================
 
